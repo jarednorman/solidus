@@ -2,29 +2,22 @@
 require 'spec_helper'
 
 describe "Order Details", type: :feature, js: true do
-  let!(:stock_location) { create(:stock_location_with_items) }
   let!(:product) { create(:product, :name => 'spree t-shirt', :price => 20.00) }
   let!(:tote) { create(:product, :name => "Tote", :price => 15.00) }
-  let(:order) { create(:order, :state => 'complete', :completed_at => "2011-02-01 12:36:15", :number => "R100") }
-  let(:state) { create(:state) }
-  #let(:shipment) { create(:shipment, :order => order, :stock_location => stock_location) }
-  let!(:shipping_method) { create(:shipping_method, :name => "Default") }
+  let(:order) { create(:order) }
+  let!(:stock_location) { Spree::StockLocation.first_or_create!(name: 'default') }
+  let!(:shipping_method) { create(:free_shipping_method, name: 'Default') }
 
-  before do
-    order.shipments.create(stock_location_id: stock_location.id)
-    order.contents.add(product.master, 2)
-  end
+  before { order.contents.add(product.master, 2) }
 
   context 'as Admin' do
     stub_authorization!
-
 
     context "cart edit page" do
       before do
         product.master.stock_items.first.update_column(:count_on_hand, 100)
         visit spree.cart_admin_order_path(order)
       end
-
 
       it "should allow me to edit order details" do
         expect(page).to have_content("spree t-shirt")
@@ -41,7 +34,7 @@ describe "Order Details", type: :feature, js: true do
         end
       end
 
-      it "can add an item to a shipment" do
+      it "can add an item to the order" do
         select2_search "spree t-shirt", :from => Spree.t(:name_or_sku)
         within("table.stock-levels") do
           fill_in "quantity_0", :with => 2
@@ -54,7 +47,7 @@ describe "Order Details", type: :feature, js: true do
         end
       end
 
-      it "can remove an item from a shipment" do
+      it "can remove an item from the order" do
         expect(page).to have_content("spree t-shirt")
 
         within_row(1) do
@@ -68,9 +61,7 @@ describe "Order Details", type: :feature, js: true do
       end
 
       # Regression test for #3862
-      it "can cancel removing an item from a shipment" do
-        expect(page).to have_content("spree t-shirt")
-
+      it "can cancel removing an item from the order" do
         within_row(1) do
           # Click "cancel" on confirmation dialog
           dismiss_alert do
@@ -81,45 +72,8 @@ describe "Order Details", type: :feature, js: true do
         expect(page).to have_content("spree t-shirt")
       end
 
-      it "can add tracking information" do
-        visit spree.edit_admin_order_path(order)
-
-        within(".show-tracking") do
-          click_icon :edit
-        end
-        fill_in "tracking", :with => "FOOBAR"
-        click_icon :check
-
-        expect(page).not_to have_css("input[name=tracking]")
-        expect(page).to have_content("Tracking: FOOBAR")
-      end
-
-      it "can change the shipping method" do
-        order = create(:completed_order_with_totals)
-        visit spree.edit_admin_order_path(order)
-        within("table.index tr.show-method") do
-          click_icon :edit
-        end
-        select2 "Default", :from => "Shipping Method"
-        click_icon :check
-
-        expect(page).not_to have_css('#selected_shipping_rate_id')
-        expect(page).to have_content("Default")
-      end
-
-      it "will show the variant sku" do
-        order = create(:completed_order_with_totals)
-        visit spree.edit_admin_order_path(order)
-        sku = order.line_items.first.variant.sku
-        expect(page).to have_content("SKU: #{sku}")
-      end
-
-      context "with special_instructions present" do
-        let(:order) { create(:order, :state => 'complete', :completed_at => "2011-02-01 12:36:15", :number => "R100", :special_instructions => "Very special instructions here") }
-        it "will show the special_instructions" do
-          visit spree.edit_admin_order_path(order)
-          expect(page).to have_content("Very special instructions here")
-        end
+      it "shows the variant sku" do
+        expect(page).to have_content("SKU: #{product.master.sku}")
       end
 
       context "variant doesn't track inventory" do
@@ -160,7 +114,6 @@ describe "Order Details", type: :feature, js: true do
       end
     end
 
-
     context 'Shipment edit page' do
       let!(:stock_location2) { create(:stock_location_with_items, name: 'Clarksville') }
 
@@ -168,14 +121,41 @@ describe "Order Details", type: :feature, js: true do
         product.master.stock_items.first.update_column(:backorderable, true)
         product.master.stock_items.first.update_column(:count_on_hand, 100)
         product.master.stock_items.last.update_column(:count_on_hand, 100)
+        order.contents.advance
+        visit spree.edit_admin_order_path(order)
+      end
+
+      it "can add tracking information" do
+        within(".show-tracking") do
+          click_icon :edit
+        end
+        fill_in "tracking", :with => "FOOBAR"
+        click_icon :check
+
+        page.should_not have_css("input[name=tracking]")
+        page.should have_content("Tracking: FOOBAR")
+      end
+
+      it "can change the shipping method" do
+        within("table.index tr.show-method") do
+          click_icon :edit
+        end
+        select2 "Default", :from => "Shipping Method"
+        click_icon :check
+
+        page.should_not have_css('#selected_shipping_rate_id')
+        page.should have_content("Default")
+      end
+
+      context "with special_instructions present" do
+        it "will show the special_instructions" do
+          order = create(:shipped_order, special_instructions: "Very special instructions here")
+          visit spree.edit_admin_order_path(order)
+          expect(page).to have_content("Very special instructions here")
+        end
       end
 
       context 'splitting to location' do
-        before { visit spree.edit_admin_order_path(order) }
-        # can not properly implement until poltergeist supports checking alert text
-        # see https://github.com/teampoltergeist/poltergeist/pull/516
-        it 'should warn you if you have not selected a location or shipment'
-
         context 'there is enough stock at the other location' do
           it 'should allow me to make a split' do
             expect(order.shipments.count).to eq(1)
@@ -187,6 +167,7 @@ describe "Order Details", type: :feature, js: true do
 
             expect(page).to have_css('.shipment', count: 2)
 
+            order.reload
             expect(order.shipments.count).to eq(2)
             expect(order.shipments.last.backordered?).to eq(false)
             expect(order.shipments.first.inventory_units_for(product.master).count).to eq(1)
@@ -194,8 +175,6 @@ describe "Order Details", type: :feature, js: true do
           end
 
           it 'should allow me to make a transfer via splitting off all stock' do
-            expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
-
             within_row(1) { click_icon 'arrows-h' }
             targetted_select2 stock_location2.name, from: '#s2id_item_stock_location'
             fill_in 'item_quantity', with: 2
@@ -203,6 +182,7 @@ describe "Order Details", type: :feature, js: true do
 
             expect(page).to have_content("PENDING PACKAGE FROM 'CLARKSVILLE'")
 
+            order.reload
             expect(order.shipments.count).to eq(1)
             expect(order.shipments.last.backordered?).to eq(false)
             expect(order.shipments.first.inventory_units_for(product.master).count).to eq(2)
@@ -210,8 +190,6 @@ describe "Order Details", type: :feature, js: true do
           end
 
           it 'should allow me to split more than I have if available there' do
-            expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
-
             within_row(1) { click_icon 'arrows-h' }
             targetted_select2 stock_location2.name, from: '#s2id_item_stock_location'
             fill_in 'item_quantity', with: 5
@@ -219,6 +197,7 @@ describe "Order Details", type: :feature, js: true do
 
             expect(page).to have_content("PENDING PACKAGE FROM 'CLARKSVILLE'")
 
+            order.reload
             expect(order.shipments.count).to eq(1)
             expect(order.shipments.last.backordered?).to eq(false)
             expect(order.shipments.first.inventory_units_for(product.master).count).to eq(5)
@@ -226,8 +205,6 @@ describe "Order Details", type: :feature, js: true do
           end
 
           it 'should not split anything if the input quantity is garbage' do
-            expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
-
             within_row(1) { click_icon 'arrows-h' }
             targetted_select2 stock_location2.name, from: '#s2id_item_stock_location'
             fill_in 'item_quantity', with: 'ff'
@@ -235,31 +212,33 @@ describe "Order Details", type: :feature, js: true do
 
             wait_for_ajax
 
+            order.reload
             expect(order.shipments.count).to eq(1)
             expect(order.shipments.first.inventory_units_for(product.master).count).to eq(2)
             expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
           end
 
-          it 'should not allow less than or equal to zero qty' do
-            expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
 
+          it 'should not allow less than or equal to zero qty' do
             within_row(1) { click_icon 'arrows-h' }
             targetted_select2 stock_location2.name, from: '#s2id_item_stock_location'
+
             fill_in 'item_quantity', with: 0
             click_icon :ok
 
             wait_for_ajax
 
+            order.reload
             expect(order.shipments.count).to eq(1)
             expect(order.shipments.first.inventory_units_for(product.master).count).to eq(2)
             expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
-
 
             fill_in 'item_quantity', with: -1
             click_icon :ok
 
             wait_for_ajax
 
+            order.reload
             expect(order.shipments.count).to eq(1)
             expect(order.shipments.first.inventory_units_for(product.master).count).to eq(2)
             expect(order.shipments.first.stock_location.id).to eq(stock_location.id)
@@ -268,10 +247,9 @@ describe "Order Details", type: :feature, js: true do
           context 'A shipment has shipped' do
 
             it 'should not show or let me back to the cart page, nor show the shipment edit buttons' do
-              order = create(:order, :state => 'payment', :number => "R100")
-              order.shipments.create!(stock_location_id: stock_location.id, state: 'shipped')
+              order = create(:shipped_order)
 
-              visit spree.cart_admin_order_path(order)
+              visit spree.edit_admin_order_path(order)
 
               expect(page.current_path).to eq(spree.edit_admin_order_path(order))
               expect(page).not_to have_text 'Cart'
@@ -314,6 +292,7 @@ describe "Order Details", type: :feature, js: true do
 
               expect(page).to have_content("PENDING PACKAGE FROM 'CLARKSVILLE'")
 
+              order.reload
               expect(order.shipments.count).to eq(1)
               expect(order.shipments.first.inventory_units_for(product.master).count).to eq(2)
               expect(order.shipments.first.stock_location.id).to eq(stock_location2.id)
@@ -323,10 +302,6 @@ describe "Order Details", type: :feature, js: true do
 
         context 'multiple items in cart' do
           it 'should have no problem splitting if multiple items are in the from shipment' do
-            order.contents.add(create(:variant), 2)
-            expect(order.shipments.count).to eq(1)
-            expect(order.shipments.first.manifest.count).to eq(2)
-
             within_row(1) { click_icon 'arrows-h' }
             targetted_select2 stock_location2.name, from: '#s2id_item_stock_location'
             click_icon :ok
@@ -340,7 +315,6 @@ describe "Order Details", type: :feature, js: true do
           end
         end
       end
-
 
       context 'splitting to shipment' do
         before do
